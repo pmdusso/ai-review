@@ -1,0 +1,5 @@
+# Scratch local de logs/testes
+.expect/
+
+# Doc de design interno (não publicar)
+docs/2026-04-06-centralizacao-ai-review-design.md

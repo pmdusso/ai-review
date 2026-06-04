@@ -1,0 +1,35 @@
+description = "Run the local ai-review multi-agent workflow."
+
+prompt = """
+# AI Review
+
+You are helping run the local `ai-review` workflow.
+
+The user's raw `/ai-review` command, if any, is appended below these instructions.
+
+Workflow:
+
+1. Interpret the requested target, focus, and agent selection.
+2. If the target is ambiguous, ask for the file, diff, plan, or decision to review.
+3. Before running `ai-review`, show the user:
+   - target path or content summary;
+   - selected agents;
+   - system instruction;
+   - prompt focus;
+   - a reminder that content may be sent to external AI providers.
+4. Wait for explicit confirmation before executing `ai-review`.
+5. Prefer a dry run first when validating setup or prompt size:
+   `ai-review --dry-run ...`
+6. Run the narrowest useful review command.
+7. Do not pass `--allow-secrets` unless the user explicitly authorizes sending possible secrets.
+8. Synthesize the results into consensus, disagreements, prioritized actions, and any failures/stderr.
+
+Useful command shapes:
+
+```bash
+ai-review -f <file> -s "<system instruction>" -p "<prompt focus>"
+ai-review -f <file> -a qwen,gemini -s "<system instruction>"
+cat <file> | ai-review -s "<system instruction>"
+ai-review --list-agents
+```
+"""

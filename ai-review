@@ -1,0 +1,642 @@
+#!/usr/bin/env bash
+# ai-review — Solicita feedback de múltiplos agentes de IA usando CLIs nativos.
+
+set -euo pipefail
+
+# --- Defaults ---
+DEFAULT_AGENTS="gemini,codex,auggie,mmx,qwen"
+ALL_AGENTS="${DEFAULT_AGENTS},claude"
+
+GEMINI_MODEL="${AI_REVIEW_GEMINI_MODEL:-gemini-3.1-pro-preview}"
+CODEX_MODEL="${AI_REVIEW_CODEX_MODEL:-gpt-5.5}"
+AUGGIE_MODEL="${AI_REVIEW_AUGGIE_MODEL:-opus4.7}"
+MMX_MODEL="${AI_REVIEW_MMX_MODEL:-MiniMax-M2.7}"
+QWEN_MODEL="${AI_REVIEW_QWEN_MODEL:-qwen3-coder-plus}"
+CLAUDE_MODEL="${AI_REVIEW_CLAUDE_MODEL:-claude-sonnet-4-6}"
+QWEN_AUTH_TYPE="${AI_REVIEW_QWEN_AUTH_TYPE:-openai}"
+TIMEOUT_SECONDS="${AI_REVIEW_TIMEOUT_SECONDS:-600}"
+
+AGENTS="$DEFAULT_AGENTS"
+SYSTEM_INSTRUCTION=""
+FILE_PATH=""
+PROMPT_PREFIX=""
+ALLOW_SECRETS=0
+DRY_RUN=0
+KEEP_RESULTS=0
+LIST_AGENTS=0
+RESULTS_DIR=""
+
+# Keep these regexes source-safe: each pattern should not match its own source
+# line when this script reviews itself.
+SECRET_PATTERNS='(PRIVATE[.]KEY|BEGIN[ ]RSA|BEGIN[ ]EC|BEGIN[ ]OPENSSH|password[[:space:]]*[:=][[:space:]]*["\x27][^"[:space:]]{8,}|api[_-]?key[[:space:]]*[:=][[:space:]]*["\x27][^"[:space:]]{8,}|secret[[:space:]]*[:=][[:space:]]*["\x27][^"[:space:]]{8,}|token[[:space:]]*[:=][[:space:]]*["\x27][^"[:space:]]{8,}|AIza[0-9A-Za-z_-]{35}|sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36})'
+
+AGENT_LIST=()
+CONTENT=""
+FULL_PROMPT=""
+COMBINED_PROMPT=""
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  -f, --file <path>          File to review (reads content and includes in prompt)
+  -s, --system <text>        System instruction / persona for the reviewer
+  -p, --prompt <text>        Additional prompt prefix (prepended to file content)
+  -a, --agents <list>        Agents: default, all, default+claude, or comma list
+                             Default: ${DEFAULT_AGENTS}; opt-in: claude
+      --allow-secrets        Send content even when possible secrets are detected
+      --dry-run              Print selected agents, models, and prompt stats only
+      --keep-results         Keep temp stdout/stderr/status files after exit
+      --list-agents          Show available agents, models, and env overrides
+      --timeout <seconds>    Per-agent timeout (default: ${TIMEOUT_SECONDS})
+  -h, --help                 Show this help
+
+Model overrides:
+  AI_REVIEW_GEMINI_MODEL, AI_REVIEW_CODEX_MODEL, AI_REVIEW_AUGGIE_MODEL,
+  AI_REVIEW_MMX_MODEL, AI_REVIEW_QWEN_MODEL, AI_REVIEW_CLAUDE_MODEL.
+  AI_REVIEW_QWEN_AUTH_TYPE controls Qwen Code auth type (default: openai).
+
+Examples:
+  $(basename "$0") -f docs/ARCHITECTURE.md -s "Você é um arquiteto sênior. Revise."
+  $(basename "$0") -f app/routes/search.py -a qwen,gemini
+  $(basename "$0") -f plan.md -a default+claude --keep-results
+  cat plan.md | $(basename "$0") -s "Revise este plano de implementação."
+EOF
+}
+
+usage_error() {
+  echo "Error: $1" >&2
+  echo "" >&2
+  usage >&2
+  exit 2
+}
+
+require_value() {
+  local option="$1"
+  local value_count="$2"
+  if [[ "$value_count" -lt 2 ]]; then
+    usage_error "$option requires a value"
+  fi
+}
+
+trim_agent() {
+  printf '%s' "$1" | tr -d '[:space:]'
+}
+
+append_agent() {
+  local agent="$1"
+  local existing
+  case "$agent" in
+    gemini|codex|auggie|mmx|qwen|claude) ;;
+    "") return 0 ;;
+    *) usage_error "Unknown agent '$agent'. Use --list-agents to see supported values." ;;
+  esac
+
+  for existing in "${AGENT_LIST[@]}"; do
+    if [[ "$existing" == "$agent" ]]; then
+      return 0
+    fi
+  done
+  AGENT_LIST+=("$agent")
+}
+
+expand_agent_token() {
+  local token="$1"
+  local nested
+  case "$token" in
+    default)
+      IFS=',' read -ra nested <<< "$DEFAULT_AGENTS"
+      ;;
+    all|default+claude)
+      IFS=',' read -ra nested <<< "$ALL_AGENTS"
+      ;;
+    *)
+      append_agent "$token"
+      return 0
+      ;;
+  esac
+
+  for token in "${nested[@]}"; do
+    append_agent "$(trim_agent "$token")"
+  done
+}
+
+expand_agents() {
+  local raw_agents=()
+  local token
+  AGENT_LIST=()
+  IFS=',' read -ra raw_agents <<< "$AGENTS"
+  for token in "${raw_agents[@]}"; do
+    expand_agent_token "$(trim_agent "$token")"
+  done
+  if [[ "${#AGENT_LIST[@]}" -eq 0 ]]; then
+    usage_error "No agents selected"
+  fi
+}
+
+agent_model() {
+  case "$1" in
+    gemini) echo "$GEMINI_MODEL" ;;
+    codex) echo "$CODEX_MODEL" ;;
+    auggie) echo "$AUGGIE_MODEL" ;;
+    mmx) echo "$MMX_MODEL" ;;
+    qwen) echo "$QWEN_MODEL" ;;
+    claude) echo "$CLAUDE_MODEL" ;;
+  esac
+}
+
+agent_cli() {
+  case "$1" in
+    gemini) echo "gemini" ;;
+    codex) echo "codex" ;;
+    auggie) echo "auggie" ;;
+    mmx) echo "mmx" ;;
+    qwen) echo "qwen" ;;
+    claude) echo "claude" ;;
+  esac
+}
+
+agent_env_var() {
+  case "$1" in
+    gemini) echo "AI_REVIEW_GEMINI_MODEL" ;;
+    codex) echo "AI_REVIEW_CODEX_MODEL" ;;
+    auggie) echo "AI_REVIEW_AUGGIE_MODEL" ;;
+    mmx) echo "AI_REVIEW_MMX_MODEL" ;;
+    qwen) echo "AI_REVIEW_QWEN_MODEL" ;;
+    claude) echo "AI_REVIEW_CLAUDE_MODEL" ;;
+  esac
+}
+
+list_agents() {
+  cat <<EOF
+Available agents:
+  gemini  default  model=${GEMINI_MODEL}  env=AI_REVIEW_GEMINI_MODEL  cli=gemini
+  codex   default  model=${CODEX_MODEL}  env=AI_REVIEW_CODEX_MODEL  cli=codex
+  auggie  default  model=${AUGGIE_MODEL}  env=AI_REVIEW_AUGGIE_MODEL  cli=auggie
+  mmx     default  model=${MMX_MODEL}  env=AI_REVIEW_MMX_MODEL  cli=mmx
+  qwen    default  model=${QWEN_MODEL}  env=AI_REVIEW_QWEN_MODEL  cli=qwen auth=${QWEN_AUTH_TYPE}
+  claude  opt-in   model=${CLAUDE_MODEL}  env=AI_REVIEW_CLAUDE_MODEL  cli=claude
+
+Agent selectors:
+  default          ${DEFAULT_AGENTS}
+  default+claude   ${ALL_AGENTS}
+  all              ${ALL_AGENTS}
+EOF
+}
+
+prepare_results_dir() {
+  local base_tmpdir="${TMPDIR:-/tmp}"
+  RESULTS_DIR="$(mktemp -d "${base_tmpdir%/}/ai-review.XXXXXX")"
+  chmod 700 "$RESULTS_DIR"
+}
+
+cleanup() {
+  if [[ "$KEEP_RESULTS" -eq 0 && -n "${RESULTS_DIR:-}" && -d "$RESULTS_DIR" ]]; then
+    rm -rf "$RESULTS_DIR"
+  fi
+}
+
+validate_timeout() {
+  case "$TIMEOUT_SECONDS" in
+    ""|*[!0-9]*) usage_error "--timeout must be a positive integer" ;;
+    0) usage_error "--timeout must be greater than zero" ;;
+  esac
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--file)
+        require_value "$1" "$#"
+        FILE_PATH="$2"
+        shift 2
+        ;;
+      -s|--system)
+        require_value "$1" "$#"
+        SYSTEM_INSTRUCTION="$2"
+        shift 2
+        ;;
+      -p|--prompt)
+        require_value "$1" "$#"
+        PROMPT_PREFIX="$2"
+        shift 2
+        ;;
+      -a|--agents)
+        require_value "$1" "$#"
+        AGENTS="$2"
+        shift 2
+        ;;
+      --allow-secrets)
+        ALLOW_SECRETS=1
+        shift
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      --keep-results)
+        KEEP_RESULTS=1
+        shift
+        ;;
+      --list-agents)
+        LIST_AGENTS=1
+        shift
+        ;;
+      --timeout)
+        require_value "$1" "$#"
+        TIMEOUT_SECONDS="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage_error "Unknown option: $1"
+        ;;
+    esac
+  done
+}
+
+build_content() {
+  if [[ -n "$FILE_PATH" ]]; then
+    if [[ ! -f "$FILE_PATH" ]]; then
+      echo "Error: File not found: $FILE_PATH" >&2
+      exit 1
+    fi
+    CONTENT=$(cat "$FILE_PATH")
+  elif [[ ! -t 0 ]]; then
+    CONTENT=$(cat)
+  else
+    echo "Error: Provide a file (-f) or pipe content via stdin." >&2
+    usage >&2
+    exit 2
+  fi
+
+  if [[ -z "$CONTENT" ]]; then
+    echo "Error: Review content is empty." >&2
+    exit 1
+  fi
+}
+
+build_prompts() {
+  if [[ -n "$PROMPT_PREFIX" ]]; then
+    FULL_PROMPT="${PROMPT_PREFIX}"$'\n\n---\n\n'"${CONTENT}"
+  else
+    FULL_PROMPT="$CONTENT"
+  fi
+
+  if [[ -n "$SYSTEM_INSTRUCTION" ]]; then
+    COMBINED_PROMPT="[Instrução de sistema]: ${SYSTEM_INSTRUCTION}"$'\n\n[Conteúdo para revisão]:\n\n'"${FULL_PROMPT}"
+  else
+    COMBINED_PROMPT="$FULL_PROMPT"
+  fi
+}
+
+print_safe_file_excerpt() {
+  local file="$1"
+  local max_lines="${2:-20}"
+  local count=0
+  local line
+  while IFS= read -r line; do
+    count=$((count + 1))
+    if printf '%s\n' "$line" | grep -qiE "$SECRET_PATTERNS"; then
+      echo "[redacted possible secret]"
+    else
+      echo "$line"
+    fi
+    if [[ "$count" -ge "$max_lines" ]]; then
+      break
+    fi
+  done < "$file"
+}
+
+check_secrets() {
+  local scan_text
+  local matches
+  local grep_status=0
+  local match_count
+  local line_numbers
+
+  scan_text="[system]"$'\n'"${SYSTEM_INSTRUCTION}"$'\n[prompt-prefix]\n'"${PROMPT_PREFIX}"$'\n[content]\n'"${CONTENT}"
+
+  set +e
+  matches="$(printf '%s\n' "$scan_text" | grep -nEi "$SECRET_PATTERNS")"
+  grep_status=$?
+  set -e
+
+  if [[ "$grep_status" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "$grep_status" -ne 0 ]]; then
+    echo "Error: secret scan failed with grep status ${grep_status}." >&2
+    exit 1
+  fi
+  if [[ -z "$matches" ]]; then
+    return 0
+  fi
+
+  match_count="$(printf '%s\n' "$matches" | wc -l | tr -d ' ')"
+  line_numbers="$(printf '%s\n' "$matches" | cut -d: -f1 | sort -nu | tr '\n' ',' | sed 's/,$//')"
+
+  echo "Warning: possible secrets detected (${match_count} match(es); scan line(s): ${line_numbers})." >&2
+  echo "Matched values are not printed. Review the input locally before sending to external agents." >&2
+
+  if [[ "$ALLOW_SECRETS" -eq 1 ]]; then
+    echo "Continuing because --allow-secrets was provided." >&2
+    return 0
+  fi
+
+  if ! { exec 3< /dev/tty; } 2>/dev/null; then
+    echo "Abortado: non-interactive secret confirmation is unavailable. Re-run with --allow-secrets if this is intentional." >&2
+    exit 3
+  fi
+
+  local confirm
+  read -r -p "Enviar mesmo assim para os agentes? [y/N] " confirm <&3
+  exec 3<&-
+  case "$confirm" in
+    y|Y|yes|YES|Yes) ;;
+    *)
+      echo "Abortado." >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_dependencies() {
+  local missing=()
+  local agent
+  local cli
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+
+  for agent in "${AGENT_LIST[@]}"; do
+    cli="$(agent_cli "$agent")"
+    if ! command -v "$cli" >/dev/null 2>&1; then
+      missing+=("$cli")
+    fi
+  done
+
+  for agent in "${AGENT_LIST[@]}"; do
+    if [[ "$agent" == "mmx" ]] && ! command -v jq >/dev/null 2>&1; then
+      missing+=("jq")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "Error: CLI(s) not found: ${missing[*]}" >&2
+    echo "Install missing tools or use -a to select only available agents." >&2
+    exit 1
+  fi
+}
+
+dry_run() {
+  local bytes
+  local lines
+  local agent
+
+  bytes="$(printf '%s' "$FULL_PROMPT" | wc -c | tr -d ' ')"
+  lines="$(printf '%s' "$FULL_PROMPT" | wc -l | tr -d ' ')"
+
+  echo "AI Review dry run"
+  echo "No content was sent to external agents."
+  echo ""
+  echo "Prompt:"
+  echo "  source: ${FILE_PATH:-stdin}"
+  echo "  bytes: ${bytes}"
+  echo "  lines: ${lines}"
+  echo "  system instruction: $(if [[ -n "$SYSTEM_INSTRUCTION" ]]; then echo "yes"; else echo "no"; fi)"
+  echo "  prompt prefix: $(if [[ -n "$PROMPT_PREFIX" ]]; then echo "yes"; else echo "no"; fi)"
+  echo ""
+  echo "Agents:"
+  for agent in "${AGENT_LIST[@]}"; do
+    echo "  - ${agent}: model=$(agent_model "$agent") env=$(agent_env_var "$agent") cli=$(agent_cli "$agent")"
+  done
+  echo ""
+  echo "Runtime:"
+  echo "  timeout: ${TIMEOUT_SECONDS}s per agent"
+  echo "  temp dir pattern: \${TMPDIR:-/tmp}/ai-review.XXXXXX"
+  echo "  keep results: $(if [[ "$KEEP_RESULTS" -eq 1 ]]; then echo "yes"; else echo "no"; fi)"
+}
+
+run_gemini() {
+  printf '%s' "$COMBINED_PROMPT" \
+    | gemini --approval-mode plan --output-format text -m "$GEMINI_MODEL" -p "Revise o conteúdo recebido em stdin." \
+      > "$RESULTS_DIR/gemini.txt" 2> "$RESULTS_DIR/gemini.err"
+}
+
+run_claude() {
+  local args=(-p --model "$CLAUDE_MODEL" --output-format text --no-session-persistence --permission-mode plan)
+  if [[ -n "$SYSTEM_INSTRUCTION" ]]; then
+    args+=(--system-prompt "$SYSTEM_INSTRUCTION")
+  fi
+  printf '%s' "$FULL_PROMPT" | claude "${args[@]}" > "$RESULTS_DIR/claude.txt" 2> "$RESULTS_DIR/claude.err"
+}
+
+run_codex() {
+  printf '%s' "$COMBINED_PROMPT" \
+    | codex --ask-for-approval never exec -m "$CODEX_MODEL" --sandbox read-only --ephemeral --color never - \
+      > "$RESULTS_DIR/codex.txt" 2> "$RESULTS_DIR/codex.err"
+}
+
+run_auggie() {
+  local instruction_file="$RESULTS_DIR/auggie.prompt.txt"
+  printf '%s' "$COMBINED_PROMPT" > "$instruction_file"
+  auggie -m "$AUGGIE_MODEL" --print --quiet --output-format text --ask --dont-save-session --instruction-file "$instruction_file" \
+    > "$RESULTS_DIR/auggie.txt" 2> "$RESULTS_DIR/auggie.err"
+}
+
+run_mmx() {
+  local messages_file="$RESULTS_DIR/mmx.messages.json"
+  if [[ -n "$SYSTEM_INSTRUCTION" ]]; then
+    jq -n --arg system "$SYSTEM_INSTRUCTION" --arg user "$FULL_PROMPT" \
+      '[{"role":"system","content":$system},{"role":"user","content":$user}]' > "$messages_file"
+  else
+    jq -n --arg user "$FULL_PROMPT" '[{"role":"user","content":$user}]' > "$messages_file"
+  fi
+  mmx text chat --quiet --no-color --non-interactive --output text --model "$MMX_MODEL" --messages-file "$messages_file" \
+    > "$RESULTS_DIR/mmx.txt" 2> "$RESULTS_DIR/mmx.err"
+}
+
+run_qwen() {
+  local args=(--approval-mode plan --channel CI --output-format text --auth-type "$QWEN_AUTH_TYPE" -m "$QWEN_MODEL")
+  if [[ -n "$SYSTEM_INSTRUCTION" ]]; then
+    args+=(--system-prompt "$SYSTEM_INSTRUCTION")
+  fi
+  printf '%s' "$FULL_PROMPT" \
+    | qwen "${args[@]}" -p "Revise o conteúdo recebido em stdin." \
+      > "$RESULTS_DIR/qwen.txt" 2> "$RESULTS_DIR/qwen.err"
+}
+
+run_agent() {
+  case "$1" in
+    gemini) run_gemini ;;
+    claude) run_claude ;;
+    codex) run_codex ;;
+    auggie) run_auggie ;;
+    mmx) run_mmx ;;
+    qwen) run_qwen ;;
+    *) return 127 ;;
+  esac
+}
+
+terminate_process_tree() {
+  local pid="$1"
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -P "$pid" 2>/dev/null || true
+  fi
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 2
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -P "$pid" 2>/dev/null || true
+  fi
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+run_agent_with_timeout() {
+  local agent="$1"
+  local status_file="$RESULTS_DIR/${agent}.status"
+  local timeout_file="$RESULTS_DIR/${agent}.timeout"
+  local child
+  local status=0
+  local start_time
+  local now
+  local timed_out=0
+
+  echo "[${agent}] Starting with $(agent_model "$agent")..." >&2
+  ( run_agent "$agent" ) 2>> "$RESULTS_DIR/${agent}.err" &
+  child=$!
+  start_time="$(date +%s)"
+
+  while kill -0 "$child" 2>/dev/null; do
+    now="$(date +%s)"
+    if [[ $((now - start_time)) -ge "$TIMEOUT_SECONDS" ]]; then
+      timed_out=1
+      printf '%s\n' "timeout" > "$timeout_file"
+      terminate_process_tree "$child"
+      break
+    fi
+    sleep 1
+  done
+
+  wait "$child" || status=$?
+
+  if [[ "$timed_out" -eq 1 || -f "$timeout_file" ]]; then
+    status=124
+    echo "[${agent}] Timed out after ${TIMEOUT_SECONDS}s." >&2
+  elif [[ "$status" -eq 0 ]]; then
+    echo "[${agent}] Done." >&2
+  else
+    echo "[${agent}] Failed (exit ${status})." >&2
+  fi
+
+  printf '%s\n' "$status" > "$status_file"
+}
+
+run_agents() {
+  local pids=()
+  local agent
+  local pid
+
+  for agent in "${AGENT_LIST[@]}"; do
+    run_agent_with_timeout "$agent" &
+    pids+=($!)
+  done
+
+  for pid in "${pids[@]}"; do
+    wait "$pid" || true
+  done
+}
+
+print_results() {
+  local agent
+  local result_file
+  local err_file
+  local status_file
+  local status
+  local ok=0
+  local failed=0
+  local timed_out=0
+
+  echo ""
+  echo "================================================================"
+  echo "                    AI Review — Resultados"
+  echo "================================================================"
+
+  for agent in "${AGENT_LIST[@]}"; do
+    result_file="$RESULTS_DIR/${agent}.txt"
+    err_file="$RESULTS_DIR/${agent}.err"
+    status_file="$RESULTS_DIR/${agent}.status"
+    status="missing"
+    if [[ -f "$status_file" ]]; then
+      status="$(cat "$status_file")"
+    fi
+
+    echo ""
+    echo "────────────────────────────────────────────────────────────────"
+    echo "  $(echo "$agent" | tr '[:lower:]' '[:upper:]') — status=${status} model=$(agent_model "$agent")"
+    echo "────────────────────────────────────────────────────────────────"
+
+    if [[ -f "$result_file" && -s "$result_file" ]]; then
+      cat "$result_file"
+      echo ""
+    else
+      echo "(sem resposta em stdout)"
+    fi
+
+    if [[ "$status" == "0" ]]; then
+      ok=$((ok + 1))
+    elif [[ "$status" == "124" ]]; then
+      timed_out=$((timed_out + 1))
+      echo ""
+      echo "stderr/status preservados para diagnóstico."
+    else
+      failed=$((failed + 1))
+      if [[ -f "$err_file" && -s "$err_file" ]]; then
+        echo ""
+        echo "stderr excerpt:"
+        print_safe_file_excerpt "$err_file" 20
+      fi
+    fi
+  done
+
+  echo ""
+  echo "================================================================"
+  echo "  Review completo. ok=${ok}, failed=${failed}, timeout=${timed_out}, total=${#AGENT_LIST[@]}"
+  if [[ "$KEEP_RESULTS" -eq 1 ]]; then
+    echo "  Artefatos preservados em: ${RESULTS_DIR}"
+  fi
+  echo "================================================================"
+}
+
+main() {
+  parse_args "$@"
+  validate_timeout
+  expand_agents
+
+  if [[ "$LIST_AGENTS" -eq 1 ]]; then
+    list_agents
+    exit 0
+  fi
+
+  build_content
+  build_prompts
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    dry_run
+    exit 0
+  fi
+
+  prepare_results_dir
+  trap cleanup EXIT
+  check_secrets
+  validate_dependencies
+  run_agents
+  print_results
+}
+
+main "$@"
