@@ -364,7 +364,7 @@ print_safe_file_excerpt() {
   local max_lines="${2:-20}"
   local count=0
   local line
-  while IFS= read -r line; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
     count=$((count + 1))
     if printf '%s\n' "$line" | grep -qiE "$SECRET_PATTERNS"; then
       echo "[redacted possible secret]"
@@ -676,7 +676,7 @@ print_results_to_fd() {
     status_file="$RESULTS_DIR/${agent}.status"
     status="missing"
     if [[ -f "$status_file" ]]; then
-      status="$(cat "$status_file")"
+      status=$(< "$status_file")
     fi
 
     echo ""
