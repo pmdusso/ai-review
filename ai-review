@@ -23,6 +23,8 @@ PROMPT_PREFIX=""
 ALLOW_SECRETS=0
 REDACT_SECRETS=0
 OUTPUT_FILE=""
+TEMPLATE_NAME=""
+DIFF_MODE=0
 DRY_RUN=0
 KEEP_RESULTS=0
 LIST_AGENTS=0
@@ -53,6 +55,8 @@ Options:
       --keep-results         Keep temp stdout/stderr/status files after exit
       --list-agents          Show available agents, models, and env overrides
   -o, --output <path>        Save the unified markdown results to a file
+  -t, --template <name>      Load a system prompt template by name
+  -d, --diff                 Review the git diff context of the file instead of full content
       --timeout <seconds>    Per-agent timeout (default: ${TIMEOUT_SECONDS})
   -h, --help                 Show this help
 
@@ -252,6 +256,15 @@ parse_args() {
         OUTPUT_FILE="$2"
         shift 2
         ;;
+      -t|--template)
+        require_value "$1" "$#"
+        TEMPLATE_NAME="$2"
+        shift 2
+        ;;
+      -d|--diff)
+        DIFF_MODE=1
+        shift
+        ;;
       --list-agents)
         LIST_AGENTS=1
         shift
@@ -272,13 +285,52 @@ parse_args() {
   done
 }
 
+load_template() {
+  if [[ -n "${TEMPLATE_NAME:-}" ]]; then
+    if [[ -n "${SYSTEM_INSTRUCTION:-}" ]]; then
+      echo "Error: Cannot provide both a custom system instruction (-s) and a template (-t)." >&2
+      exit 1
+    fi
+    if [[ "$TEMPLATE_NAME" =~ [^a-zA-Z0-9_-] ]]; then
+      echo "Error: Invalid template name. Only alphanumeric, hyphen, and underscore characters are allowed." >&2
+      exit 1
+    fi
+    local tpl_path=""
+    if [[ -f "./.ai-review/templates/${TEMPLATE_NAME}.txt" ]]; then
+      tpl_path="./.ai-review/templates/${TEMPLATE_NAME}.txt"
+    elif [[ -f "$HOME/.config/ai-review/templates/${TEMPLATE_NAME}.txt" ]]; then
+      tpl_path="$HOME/.config/ai-review/templates/${TEMPLATE_NAME}.txt"
+    else
+      echo "Error: Template ${TEMPLATE_NAME} not found." >&2
+      exit 1
+    fi
+    SYSTEM_INSTRUCTION="$(cat "$tpl_path")"
+  fi
+}
+
 build_content() {
+  if [[ "${DIFF_MODE:-0}" -eq 1 && -z "${FILE_PATH:-}" ]]; then
+    echo "Error: --diff requires a file path (-f)." >&2
+    exit 2
+  fi
+
   if [[ -n "$FILE_PATH" ]]; then
     if [[ ! -f "$FILE_PATH" ]]; then
       echo "Error: File not found: $FILE_PATH" >&2
       exit 1
     fi
-    CONTENT=$(cat "$FILE_PATH")
+    if [[ "${DIFF_MODE:-0}" -eq 1 ]]; then
+      local diff_content
+      diff_content=$(git diff HEAD -- "$FILE_PATH" 2>/dev/null || true)
+      if [[ -z "$diff_content" ]]; then
+        echo "Warning: No diff found for $FILE_PATH, using full file." >&2
+        CONTENT=$(cat "$FILE_PATH")
+      else
+        CONTENT="$(printf '=== FILE CONTEXT ===\n%s\n\n=== GIT DIFF ===\n%s' "$(cat "$FILE_PATH")" "$diff_content")"
+      fi
+    else
+      CONTENT=$(cat "$FILE_PATH")
+    fi
   elif [[ ! -t 0 ]]; then
     CONTENT=$(cat)
   else
@@ -680,6 +732,7 @@ main() {
   parse_args "$@"
   validate_timeout
   expand_agents
+  load_template
 
   if [[ "$LIST_AGENTS" -eq 1 ]]; then
     list_agents
