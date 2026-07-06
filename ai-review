@@ -22,6 +22,7 @@ FILE_PATH=""
 PROMPT_PREFIX=""
 ALLOW_SECRETS=0
 REDACT_SECRETS=0
+OUTPUT_FILE=""
 DRY_RUN=0
 KEEP_RESULTS=0
 LIST_AGENTS=0
@@ -51,6 +52,7 @@ Options:
       --dry-run              Print selected agents, models, and prompt stats only
       --keep-results         Keep temp stdout/stderr/status files after exit
       --list-agents          Show available agents, models, and env overrides
+  -o, --output <path>        Save the unified markdown results to a file
       --timeout <seconds>    Per-agent timeout (default: ${TIMEOUT_SECONDS})
   -h, --help                 Show this help
 
@@ -244,6 +246,11 @@ parse_args() {
       --keep-results)
         KEEP_RESULTS=1
         shift
+        ;;
+      -o|--output)
+        require_value "$1" "$#"
+        OUTPUT_FILE="$2"
+        shift 2
         ;;
       --list-agents)
         LIST_AGENTS=1
@@ -596,7 +603,7 @@ run_agents() {
   fi
 }
 
-print_results() {
+print_results_to_fd() {
   local agent
   local result_file
   local err_file
@@ -655,6 +662,18 @@ print_results() {
     echo "  Artefatos preservados em: ${RESULTS_DIR}"
   fi
   echo "================================================================"
+}
+
+print_results() {
+  if [[ -n "${OUTPUT_FILE:-}" ]]; then
+    print_results_to_fd > "$OUTPUT_FILE" && echo "Results saved to $OUTPUT_FILE" >&2
+  fi
+
+  if [[ -t 1 ]] && command -v less >/dev/null 2>&1; then
+    print_results_to_fd | less -R -F -X
+  else
+    print_results_to_fd
+  fi
 }
 
 main() {
