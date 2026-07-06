@@ -524,7 +524,6 @@ run_agent_with_timeout() {
   local now
   local timed_out=0
 
-  echo "[${agent}] Starting with $(agent_model "$agent")..." >&2
   ( run_agent "$agent" ) 2>> "$RESULTS_DIR/${agent}.err" &
   child=$!
   start_time="$(date +%s)"
@@ -544,14 +543,26 @@ run_agent_with_timeout() {
 
   if [[ "$timed_out" -eq 1 || -f "$timeout_file" ]]; then
     status=124
-    echo "[${agent}] Timed out after ${TIMEOUT_SECONDS}s." >&2
-  elif [[ "$status" -eq 0 ]]; then
-    echo "[${agent}] Done." >&2
-  else
-    echo "[${agent}] Failed (exit ${status})." >&2
   fi
 
-  printf '%s\n' "$status" > "$status_file"
+  printf '%s\n' "$status" > "${status_file}.tmp" && mv "${status_file}.tmp" "$status_file"
+}
+
+render_status() {
+  local agent
+  local st
+  local out=""
+  for agent in "${AGENT_LIST[@]}"; do
+    if [[ -f "$RESULTS_DIR/${agent}.status" ]]; then
+      st=$(< "$RESULTS_DIR/${agent}.status")
+      if [[ "$st" == "0" ]]; then out+="[$agent] ✓  ";
+      elif [[ "$st" == "124" ]]; then out+="[$agent] ⏱️  ";
+      else out+="[$agent] ✗  "; fi
+    else
+      out+="[$agent] ⏳  "
+    fi
+  done
+  printf "\r\033[K%s" "$out" >&2
 }
 
 run_agents() {
@@ -564,9 +575,25 @@ run_agents() {
     pids+=($!)
   done
 
-  for pid in "${pids[@]}"; do
-    wait "$pid" || true
-  done
+  if [[ -t 2 ]]; then
+    while true; do
+      render_status
+      local all_done=1
+      for agent in "${AGENT_LIST[@]}"; do
+        if [[ ! -f "$RESULTS_DIR/${agent}.status" ]]; then
+          all_done=0
+          break
+        fi
+      done
+      if [[ "$all_done" -eq 1 ]]; then break; fi
+      sleep 0.5
+    done
+    printf "\n" >&2
+  else
+    for pid in "${pids[@]}"; do
+      wait "$pid" || true
+    done
+  fi
 }
 
 print_results() {
