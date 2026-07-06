@@ -383,28 +383,31 @@ validate_dependencies() {
   local missing=()
   local agent
   local cli
-
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
+  local available_agents=()
 
   for agent in "${AGENT_LIST[@]}"; do
     cli="$(agent_cli "$agent")"
     if ! command -v "$cli" >/dev/null 2>&1; then
-      missing+=("$cli")
-    fi
-  done
-
-  for agent in "${AGENT_LIST[@]}"; do
-    if [[ "$agent" == "mmx" ]] && ! command -v jq >/dev/null 2>&1; then
-      missing+=("jq")
+      missing+=("$agent")
+    elif [[ "$agent" == "mmx" ]] && ! command -v jq >/dev/null 2>&1; then
+      missing+=("$agent (jq missing)")
+    else
+      available_agents+=("$agent")
     fi
   done
 
   if [[ "${#missing[@]}" -gt 0 ]]; then
-    echo "Error: CLI(s) not found: ${missing[*]}" >&2
-    echo "Install missing tools or use -a to select only available agents." >&2
-    exit 1
+    if [[ "$AGENTS" == "$DEFAULT_AGENTS" || "$AGENTS" == "default" ]]; then
+      echo "Warning: The following default agents are missing and will be skipped: ${missing[*]}" >&2
+      AGENT_LIST=("${available_agents[@]}")
+      if [[ "${#AGENT_LIST[@]}" -eq 0 ]]; then
+        echo "Error: No available agents to run." >&2
+        exit 1
+      fi
+    else
+      echo "Error: Required CLI(s) not found for explicitly requested agents: ${missing[*]}" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -641,6 +644,8 @@ main() {
   check_secrets
   build_prompts
 
+  validate_dependencies
+
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dry_run
     exit 0
@@ -648,7 +653,6 @@ main() {
 
   prepare_results_dir
   trap cleanup EXIT
-  validate_dependencies
   run_agents
   print_results
 }
