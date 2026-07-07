@@ -71,6 +71,10 @@ Flags úteis:
 
 - `--list-agents` mostra agentes, modelos e env vars.
 - `--dry-run` valida seleção e tamanho do prompt sem enviar conteúdo.
+- `--redact` substitui segredos detectados por `[REDACTED]` e prossegue sem abortar ou pedir confirmação.
+- `-o, --output <path>` salva o relatório unificado final formatado em arquivo Markdown local.
+- `-t, --template <name>` carrega uma instrução de sistema pré-configurada em arquivo de template.
+- `-d, --diff` extrai e revisa cirurgicamente o git diff local do arquivo, combinando com seu contexto.
 - `--keep-results` preserva stdout/stderr/status temporários.
 - `--allow-secrets` só deve ser usado quando o envio de possíveis secrets for intencional.
 

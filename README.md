@@ -41,7 +41,19 @@ git diff | ai-review -s "Revise este diff."
 ai-review -f app.py -a qwen,gemini
 ai-review -f plan.md -a default+claude
 
-# Validar sem enviar nada
+# Redigir segredos detectados automaticamente (substitui por [REDACTED] sem abortar)
+ai-review -f app.py --redact -s "Revise."
+
+# Salvar relatório final unificado em arquivo Markdown local
+ai-review -f plan.md -o relatorio.md
+
+# Carregar uma persona/instrução de sistema de um arquivo de template
+ai-review -f main.py -t security
+
+# Revisar estritamente o git diff local do arquivo (combina diff + contexto)
+ai-review -f app.py -d
+
+# Validar sem enviar nada (simula dry-run de payload e avisos)
 ai-review --dry-run -f plan.md
 ai-review --list-agents
 ```

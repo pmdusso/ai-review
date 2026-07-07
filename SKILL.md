@@ -58,6 +58,10 @@ Useful flags:
 ```bash
 ai-review --list-agents
 ai-review --dry-run
+ai-review --redact           # Redacts secrets automatically into [REDACTED] instead of aborting
+ai-review -o report.md       # Saves final unified markdown report to a local file
+ai-review -t security        # Loads system prompt instructions from config/local templates
+ai-review -d                 # Injects file's local git diff context alongside content
 ai-review --keep-results
 ai-review --timeout 900
 ```

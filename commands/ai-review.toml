@@ -29,6 +29,10 @@ Useful command shapes:
 ```bash
 ai-review -f <file> -s "<system instruction>" -p "<prompt focus>"
 ai-review -f <file> -a qwen,gemini -s "<system instruction>"
+ai-review -f <file> --redact -s "<system instruction>"
+ai-review -f <file> -o <report.md> -s "<system instruction>"
+ai-review -f <file> -t <template_name>
+ai-review -f <file> -d -s "<system instruction>"
 cat <file> | ai-review -s "<system instruction>"
 ai-review --list-agents
 ```
