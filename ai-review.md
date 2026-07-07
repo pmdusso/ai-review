@@ -54,7 +54,7 @@ Modelos default:
 - `auggie` → `opus4.7`
 - `mmx` → `MiniMax-M2.7`
 - `qwen` → `qwen3-coder-plus`
-- `claude` → `claude-sonnet-4-6`
+- `claude` → `claude-fable-5`
 
 Overrides por ambiente:
 

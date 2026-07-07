@@ -67,7 +67,7 @@ ai-review --list-agents
 | `auggie` | `opus4.7` | `AI_REVIEW_AUGGIE_MODEL` |
 | `mmx` | `MiniMax-M2.7` | `AI_REVIEW_MMX_MODEL` |
 | `qwen` | `qwen3-coder-plus` | `AI_REVIEW_QWEN_MODEL` |
-| `claude` (opt-in) | `claude-sonnet-4-6` | `AI_REVIEW_CLAUDE_MODEL` |
+| `claude` (opt-in) | `claude-fable-5` | `AI_REVIEW_CLAUDE_MODEL` |
 
 Timeout por agente: `AI_REVIEW_TIMEOUT_SECONDS` (default 600). Auth do Qwen: `AI_REVIEW_QWEN_AUTH_TYPE` (default `openai`).
 
