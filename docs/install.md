@@ -15,10 +15,25 @@ O fluxo recomendado é:
 Clone o repo e exponha o script no `PATH`:
 
 ```bash
-git clone <repo-remoto-ai-review> ~/code/shared/ai-review
+# Método recomendado (CLI + templates + skills):
+./scripts/install.sh
+
+# Sem symlinks de skills (só CLI + templates):
+./scripts/install.sh --no-skills
+
+# Ou manualmente:
+git clone https://github.com/pmdusso/ai-review ~/code/shared/ai-review
 mkdir -p ~/.local/bin
 ln -sf ~/code/shared/ai-review/ai-review ~/.local/bin/ai-review
 ```
+
+Por padrão, `install.sh` também cria:
+
+| Destino | Aponta para |
+|---------|-------------|
+| `~/.agents/skills/ai-review` | checkout do repo |
+| `~/.claude/skills/ai-review` | `~/.agents/skills/ai-review` |
+| `~/.codex/skills/ai-review` | `~/.agents/skills/ai-review` |
 
 Garanta que `~/.local/bin` está no `PATH`:
 
@@ -31,6 +46,7 @@ Valide:
 
 ```bash
 ai-review --help
+ai-review --version
 ai-review --list-agents
 ```
 
@@ -38,22 +54,26 @@ Atualize a VM com:
 
 ```bash
 git -C ~/code/shared/ai-review pull --ff-only
+# ou: AI_REVIEW_INSTALL_DIR=~/code/shared/ai-review ./scripts/install.sh
 ```
 
 ## Instalação em agentes
 
 Este repo também empacota instruções para agentes:
 
-- `SKILL.md`: compatível com Codex Skills e Claude Code Skills.
+- `SKILL.md`: compatível com Codex Skills, Claude Code Skills e `~/.agents/skills`.
 - `gemini-extension.json`, `GEMINI.md` e `commands/ai-review.toml`: compatíveis com Gemini CLI Extensions.
+
+O `./scripts/install.sh` já instala as skills Claude/Codex/agents (use `--no-skills` para pular). Os passos abaixo são o equivalente manual.
 
 ### Codex Skill
 
 Para instalar localmente por symlink:
 
 ```bash
-mkdir -p ~/.codex/skills
-ln -sfn ~/code/shared/ai-review ~/.codex/skills/ai-review
+mkdir -p ~/.agents/skills ~/.codex/skills
+ln -sfn ~/code/shared/ai-review ~/.agents/skills/ai-review
+ln -sfn ~/.agents/skills/ai-review ~/.codex/skills/ai-review
 ```
 
 Depois reinicie a sessão do Codex para recarregar a lista de skills.
@@ -62,7 +82,7 @@ Se preferir instalar a partir do GitHub depois que o repo remoto existir:
 
 ```bash
 python3 "$HOME/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
-  --repo <owner>/<repo> \
+  --repo pmdusso/ai-review \
   --path .
 ```
 
@@ -70,11 +90,12 @@ O symlink é melhor para VMs que fazem `git pull`, porque a skill acompanha auto
 
 ### Claude Code Skill
 
-Claude Code descobre skills pessoais em `~/.claude/skills/`. Como o formato também usa um diretório com `SKILL.md`, o mesmo repo pode ser instalado por symlink:
+Claude Code descobre skills pessoais em `~/.claude/skills/`. O padrão do time é ter a skill canônica em `~/.agents/skills/` e linkar Claude a partir dela:
 
 ```bash
-mkdir -p ~/.claude/skills
-ln -sfn ~/code/shared/ai-review ~/.claude/skills/ai-review
+mkdir -p ~/.agents/skills ~/.claude/skills
+ln -sfn ~/code/shared/ai-review ~/.agents/skills/ai-review
+ln -sfn ~/.agents/skills/ai-review ~/.claude/skills/ai-review
 ```
 
 Depois reinicie a sessão do Claude Code. Para verificar, pergunte dentro do Claude:
@@ -114,7 +135,7 @@ Dentro do Gemini CLI, use:
 Se preferir instalar a partir do GitHub depois que o repo remoto existir:
 
 ```bash
-gemini extensions install https://github.com/<owner>/<repo>
+gemini extensions install https://github.com/pmdusso/ai-review
 ```
 
 Extensões instaladas por `gemini extensions install` são copiadas para `~/.gemini/extensions`; para receber mudanças depois, rode:
@@ -122,6 +143,24 @@ Extensões instaladas por `gemini extensions install` são copiadas para `~/.gem
 ```bash
 gemini extensions update ai-review
 ```
+
+## Setup mínimo vs completo
+
+| Perfil | Dependências | Uso |
+|--------|--------------|-----|
+| **Mínimo** | `bash`, `jq`, `yq`, 1 agente (`qwen`) | Iteração rápida (`-a fast`) |
+| **Completo** | Mínimo + CLIs autenticados: `gemini`, `codex`, `auggie`, `mmx`, `qwen` (+ `claude` opt-in) | Fan-out `default` / `full` |
+
+Instale `yq` (v4+) para config YAML por projeto:
+
+```bash
+brew install yq
+# Linux: https://github.com/mikefarah/yq#install
+```
+
+`yq` só é obrigatório quando existe `~/.config/ai-review/config.yaml` ou `.ai-review/config.yaml`.
+
+Referência completa de flags/config: [`docs/reference.md`](reference.md).
 
 ## Dependências base
 

@@ -1,0 +1,20 @@
+# Exemplo de config por projeto. Copie para .ai-review/config.yaml
+# (ou use: scripts/init-project.sh)
+#
+# Prioridade: CLI flags > env AI_REVIEW_* > este arquivo >
+# ~/.config/ai-review/config.yaml > defaults do script.
+# Requer yq v4+: https://github.com/mikefarah/yq
+
+version: 1
+agents: balanced          # preset, lista CSV, ou lista YAML: [qwen, gemini]
+timeout_seconds: 300
+template: pr-review       # usado como -t quando -s não for passado
+output: null              # caminho default para -o (opcional)
+redact: true              # equivalente a --redact
+models:
+  qwen: qwen3-coder-plus
+  gemini: gemini-3.1-pro-preview
+  # codex: gpt-5.5
+  # auggie: opus4.7
+  # mmx: MiniMax-M2.7
+  # claude: claude-fable-5

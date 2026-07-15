@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Optional slow mode for timeout tests
+sleep_secs="${MOCK_QWEN_SLEEP:-0}"
+if [[ "$sleep_secs" =~ ^[0-9]+$ ]] && [[ "$sleep_secs" -gt 0 ]]; then
+  sleep "$sleep_secs"
+fi
+cat >/dev/null || true
+echo "mock qwen review OK"
+exit 0

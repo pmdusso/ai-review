@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null || true
+echo "mock codex review OK"
+exit 0

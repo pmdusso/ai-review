@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mock gemini CLI for bats
+set -euo pipefail
+cat >/dev/null || true
+echo "mock gemini review OK"
+exit 0

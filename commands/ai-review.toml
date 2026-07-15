@@ -7,33 +7,37 @@ You are helping run the local `ai-review` workflow.
 
 The user's raw `/ai-review` command, if any, is appended below these instructions.
 
+Full reference: docs/reference.md in the ai-review repo (flags, presets, templates, config YAML).
+
 Workflow:
 
 1. Interpret the requested target, focus, and agent selection.
 2. If the target is ambiguous, ask for the file, diff, plan, or decision to review.
 3. Before running `ai-review`, show the user:
    - target path or content summary;
-   - selected agents;
-   - system instruction;
+   - selected agents or preset (`fast`, `balanced`, `full`);
+   - system instruction or template (`-t`);
    - prompt focus;
    - a reminder that content may be sent to external AI providers.
 4. Wait for explicit confirmation before executing `ai-review`.
 5. Prefer a dry run first when validating setup or prompt size:
    `ai-review --dry-run ...`
-6. Run the narrowest useful review command.
-7. Do not pass `--allow-secrets` unless the user explicitly authorizes sending possible secrets.
-8. Synthesize the results into consensus, disagreements, prioritized actions, and any failures/stderr.
+6. Prefer bundled templates when they fit: `security`, `architecture`, `pr-review`, `plan-review`.
+7. Run the narrowest useful review command.
+8. Do not pass `--allow-secrets` unless the user explicitly authorizes sending possible secrets.
+9. In CI/headless contexts, prefer `--redact`.
+10. Synthesize the results into consensus, disagreements, prioritized actions, and any failures/stderr.
 
 Useful command shapes:
 
 ```bash
 ai-review -f <file> -s "<system instruction>" -p "<prompt focus>"
-ai-review -f <file> -a qwen,gemini -s "<system instruction>"
-ai-review -f <file> --redact -s "<system instruction>"
-ai-review -f <file> -o <report.md> -s "<system instruction>"
-ai-review -f <file> -t <template_name>
-ai-review -f <file> -d -s "<system instruction>"
+ai-review -f <file> -a balanced -t pr-review
+ai-review -f <file> -a fast --redact -s "<system instruction>"
+ai-review -f <file> -o <report.md> -t architecture
+ai-review -f <file> -d -t pr-review
 cat <file> | ai-review -s "<system instruction>"
 ai-review --list-agents
+ai-review --version
 ```
 """
